@@ -1,0 +1,175 @@
+.tf_base:
+  image: codebank.nexus.cloud.frb.org/cicd-executor-matter:2
+  tags: [docker, linux]
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0
+    TERRAFORM_VERSION: 1.9.8
+    AWS_PROFILE: default
+    CUSTOMER_CODE: nis          # REQUIRED BY make.sh
+
+stages:
+  - plan
+  - apply
+
+############################
+# RULES
+############################
+.dev_rules: &dev_rules
+  - if: '$CI_COMMIT_BRANCH == "develop"'
+    variables:
+      ENV_CONTEXT: nonprod
+  - if: '$CI_COMMIT_BRANCH =~ /^feature\/.+$/'
+    variables:
+      ENV_CONTEXT: nonprod
+  - when: never
+
+.prod_rules: &prod_rules
+  - if: '$CI_COMMIT_BRANCH == "main"'
+    variables:
+      ENV_CONTEXT: prod
+  - when: never
+
+############################
+# PLAN – DEV EAST
+############################
+plan_dev_east:
+  stage: plan
+  extends: .tf_base
+  rules: *dev_rules
+  variables:
+    TERRAFORM_ACTION: plan
+    REGION: east
+    AWS_REGION: us-gov-east-1
+    STATE_BUCKET: nis-tfstate-dev-east
+    LOCK_TABLE: nis-tflock-dev-east
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# PLAN – DEV WEST
+############################
+plan_dev_west:
+  stage: plan
+  extends: .tf_base
+  rules: *dev_rules
+  variables:
+    TERRAFORM_ACTION: plan
+    REGION: west
+    AWS_REGION: us-gov-west-1
+    STATE_BUCKET: nis-tfstate-dev-west
+    LOCK_TABLE: nis-tflock-dev-west
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# APPLY – DEV EAST
+############################
+apply_dev_east:
+  stage: apply
+  extends: .tf_base
+  needs: [plan_dev_east]
+  when: manual
+  rules: *dev_rules
+  variables:
+    TERRAFORM_ACTION: apply
+    REGION: east
+    AWS_REGION: us-gov-east-1
+    STATE_BUCKET: nis-tfstate-dev-east
+    LOCK_TABLE: nis-tflock-dev-east
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# APPLY – DEV WEST
+############################
+apply_dev_west:
+  stage: apply
+  extends: .tf_base
+  needs: [plan_dev_west]
+  when: manual
+  rules: *dev_rules
+  variables:
+    TERRAFORM_ACTION: apply
+    REGION: west
+    AWS_REGION: us-gov-west-1
+    STATE_BUCKET: nis-tfstate-dev-west
+    LOCK_TABLE: nis-tflock-dev-west
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# PLAN – PROD EAST
+############################
+plan_prod_east:
+  stage: plan
+  extends: .tf_base
+  rules: *prod_rules
+  variables:
+    TERRAFORM_ACTION: plan
+    REGION: east
+    AWS_REGION: us-gov-east-1
+    STATE_BUCKET: nis-tfstate-prod-east
+    LOCK_TABLE: nis-tflock-prod-east
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# PLAN – PROD WEST
+############################
+plan_prod_west:
+  stage: plan
+  extends: .tf_base
+  rules: *prod_rules
+  variables:
+    TERRAFORM_ACTION: plan
+    REGION: west
+    AWS_REGION: us-gov-west-1
+    STATE_BUCKET: nis-tfstate-prod-west
+    LOCK_TABLE: nis-tflock-prod-west
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# APPLY – PROD EAST
+############################
+apply_prod_east:
+  stage: apply
+  extends: .tf_base
+  needs: [plan_prod_east]
+  when: manual
+  rules: *prod_rules
+  variables:
+    TERRAFORM_ACTION: apply
+    REGION: east
+    AWS_REGION: us-gov-east-1
+    STATE_BUCKET: nis-tfstate-prod-east
+    LOCK_TABLE: nis-tflock-prod-east
+  script:
+    - chmod +x make.sh
+    - ./make.sh
+
+############################
+# APPLY – PROD WEST
+############################
+apply_prod_west:
+  stage: apply
+  extends: .tf_base
+  needs: [plan_prod_west]
+  when: manual
+  rules: *prod_rules
+  variables:
+    TERRAFORM_ACTION: apply
+    REGION: west
+    AWS_REGION: us-gov-west-1
+    STATE_BUCKET: nis-tfstate-prod-west
+    LOCK_TABLE: nis-tflock-prod-west
+  script:
+    - chmod +x make.sh
+    - ./make.sh
