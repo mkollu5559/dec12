@@ -1,35 +1,51 @@
 ############################
-# VARIABLES (DEFAULT = FALSE)
+# VARIABLES
 ############################
 variable "enable_layers" {
   type    = bool
   default = false
 }
 
+variable "layer_arns" {
+  description = "Optional custom layer ARNs override"
+  type        = list(string)
+  default     = []
+}
+
+variable "env" {
+  type = string
+}
+
+variable "region" {
+  type = string
+}
+
 ############################
-# LOCALS – ENV / REGION BASED LAYERS
+# LOCALS – SAME STYLE AS YOUR FILE
 ############################
 locals {
   lambda_layers_local = var.enable_layers ? (
-    var.env == "dev" && var.region == "east" ? [
-      "arn:aws:lambda:us-east-1:123456789012:layer:nit-common-utils:3",
-      "arn:aws:lambda:us-east-1:123456789012:layer:nit-requests-lib:2"
-    ] :
-    var.env == "dev" && var.region == "west" ? [
-      "arn:aws:lambda:us-west-2:123456789012:layer:nit-common-utils:3"
-    ] :
-    var.env == "prod" && var.region == "east" ? [
-      "arn:aws:lambda:us-east-1:123456789012:layer:nit-common-utils:5"
-    ] :
-    var.env == "prod" && var.region == "west" ? [
-      "arn:aws:lambda:us-west-2:123456789012:layer:nit-common-utils:5"
-    ] :
-    []
+    length(var.layer_arns) > 0 ? var.layer_arns : (
+      var.env == "dev"  && var.region == "east" ? [
+        "arn:aws:lambda:us-east-1:123456789012:layer:nit-common-utils:3",
+        "arn:aws:lambda:us-east-1:123456789012:layer:nit-requests-lib:2"
+      ] :
+      var.env == "dev"  && var.region == "west" ? [
+        "arn:aws:lambda:us-west-2:123456789012:layer:nit-common-utils:3"
+      ] :
+      var.env == "prod" && var.region == "east" ? [
+        "arn:aws:lambda:us-east-1:123456789012:layer:nit-common-utils:5"
+      ] :
+      var.env == "prod" && var.region == "west" ? [
+        "arn:aws:lambda:us-west-2:123456789012:layer:nit-common-utils:5"
+      ] :
+      []
+    )
   ) : []
 }
 
 ############################
-# LAMBDA FUNCTION
+# LAMBDA
 ############################
 resource "aws_lambda_function" "this" {
   function_name = var.lambda_name
