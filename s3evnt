@@ -1,0 +1,155 @@
+############################
+# VARIABLES
+############################
+
+variable "function_name" {
+  description = "Lambda function name"
+  type        = string
+}
+
+variable "enable_schedule_cloudwatch_event" {
+  description = "Enable CloudWatch scheduled (rate) based invocation of Lambda"
+  type        = bool
+  default     = false
+}
+
+variable "schedule_rate_minutes" {
+  description = "Rate in minutes for scheduled CloudWatch Event"
+  type        = number
+  default     = 5
+}
+
+variable "enable_s3_event" {
+  description = "Enable S3 based EventBridge rule to invoke Lambda"
+  type        = bool
+  default     = false
+}
+
+variable "s3_bucket_name" {
+  description = "S3 bucket name to listen for object created events"
+  type        = string
+  default     = null
+}
+
+variable "s3_prefix" {
+  description = "S3 object key prefix to filter events (example: incoming/)"
+  type        = string
+  default     = null
+}
+
+############################
+# LOCALS
+############################
+
+locals {
+  tags_local             = {}
+  source_account_local   = data.aws_caller_identity.current.account_id
+}
+
+############################
+# DATA
+############################
+
+data "aws_caller_identity" "current" {}
+
+############################
+# SCHEDULE BASED EVENT
+############################
+
+resource "aws_cloudwatch_event_rule" "lambda_schedule" {
+  count = var.enable_schedule_cloudwatch_event ? 1 : 0
+
+  name                = "${var.function_name}-schedule"
+  description         = "Invoke ${var.function_name} on schedule"
+  schedule_expression = "rate(${var.schedule_rate_minutes} minutes)"
+
+  tags = local.tags_local
+}
+
+resource "aws_cloudwatch_event_target" "lambda_schedule_target" {
+  count = var.enable_schedule_cloudwatch_event ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.lambda_schedule[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.lambda.arn
+}
+
+resource "aws_lambda_permission" "allow_schedule_cloudwatch" {
+  count = var.enable_schedule_cloudwatch_event ? 1 : 0
+
+  statement_id   = "${var.function_name}-AllowExecutionFromSchedule"
+  action         = "lambda:InvokeFunction"
+  function_name  = aws_lambda_function.lambda.function_name
+  principal      = "events.amazonaws.com"
+  source_arn     = aws_cloudwatch_event_rule.lambda_schedule[0].arn
+  source_account = local.source_account_local
+}
+
+############################
+# S3 BASED EVENT (PREFIX)
+############################
+
+resource "aws_cloudwatch_event_rule" "s3_put_rule" {
+  count = var.enable_s3_event ? 1 : 0
+
+  name        = "${var.function_name}-s3-put"
+  description = "Invoke ${var.function_name} on S3 PUT with prefix"
+
+  event_pattern = jsonencode({
+    source      = ["aws.s3"]
+    detail-type = ["Object Created"]
+    detail = {
+      bucket = {
+        name = [var.s3_bucket_name]
+      }
+      object = {
+        key = [{
+          prefix = var.s3_prefix
+        }]
+      }
+    }
+  })
+
+  tags = local.tags_local
+}
+
+resource "aws_cloudwatch_event_target" "s3_lambda_target" {
+  count = var.enable_s3_event ? 1 : 0
+
+  rule      = aws_cloudwatch_event_rule.s3_put_rule[0].name
+  target_id = "lambda"
+  arn       = aws_lambda_function.lambda.arn
+}
+
+resource "aws_lambda_permission" "allow_s3_eventbridge" {
+  count = var.enable_s3_event ? 1 : 0
+
+  statement_id   = "${var.function_name}-AllowExecutionFromS3EventBridge"
+  action         = "lambda:InvokeFunction"
+  function_name  = aws_lambda_function.lambda.function_name
+  principal      = "events.amazonaws.com"
+  source_arn     = aws_cloudwatch_event_rule.s3_put_rule[0].arn
+  source_account = local.source_account_local
+}
+
+############################
+# VARIABLE VALIDATION
+############################
+
+variable "s3_prefix" {
+  description = "S3 object key prefix to filter events (example: incoming/). Required when enable_s3_event is true."
+  type        = string
+  default     = null
+
+  validation {
+    condition = (
+      var.enable_s3_event == false ||
+      (
+        var.s3_prefix != null &&
+        trim(var.s3_prefix) != "" &&
+        can(regex("^[^*?]+/?$", var.s3_prefix))
+      )
+    )
+    error_message = "When enable_s3_event = true, s3_prefix must be provided and must be a valid S3 prefix (no wildcards *, ?)."
+  }
+}
