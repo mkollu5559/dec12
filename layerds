@@ -1,124 +1,42 @@
-############################################
-# VARIABLES (NO HARD CODE)
-############################################
+############################
+# VARIABLES (DEFAULT = FALSE)
+############################
 variable "enable_layers" {
   type    = bool
   default = false
 }
 
-variable "layer_name" {
-  type    = string
-  default = null
+############################
+# LOCALS – ENV / REGION BASED LAYERS
+############################
+locals {
+  lambda_layers_local = var.enable_layers ? (
+    var.env == "dev" && var.region == "east" ? [
+      "arn:aws:lambda:us-east-1:123456789012:layer:nit-common-utils:3",
+      "arn:aws:lambda:us-east-1:123456789012:layer:nit-requests-lib:2"
+    ] :
+    var.env == "dev" && var.region == "west" ? [
+      "arn:aws:lambda:us-west-2:123456789012:layer:nit-common-utils:3"
+    ] :
+    var.env == "prod" && var.region == "east" ? [
+      "arn:aws:lambda:us-east-1:123456789012:layer:nit-common-utils:5"
+    ] :
+    var.env == "prod" && var.region == "west" ? [
+      "arn:aws:lambda:us-west-2:123456789012:layer:nit-common-utils:5"
+    ] :
+    []
+  ) : []
 }
 
-variable "layer_source_dir" {
-  type    = string
-  default = null
-}
-
-variable "layer_runtimes" {
-  type    = list(string)
-  default = ["python3.10"]
-}
-
-variable "event_bus_name" {
-  type = string
-}
-
-variable "s3_bucket_name" {
-  type = string
-}
-
-variable "s3_prefix" {
-  type    = string
-  default = "" # empty = wildcard
-}
-
-############################################
-# LAYER ZIP FROM .py FILES
-############################################
-data "archive_file" "layer_zip" {
-  count       = var.enable_layers ? 1 : 0
-  type        = "zip"
-  source_dir  = var.layer_source_dir   # must contain python/yourlib.py
-  output_path = "${path.module}/build/${var.layer_name}.zip"
-}
-
-############################################
-# LAMBDA LAYER
-############################################
-resource "aws_lambda_layer_version" "this" {
-  count               = var.enable_layers ? 1 : 0
-  layer_name          = var.layer_name
-  filename            = data.archive_file.layer_zip[0].output_path
-  source_code_hash    = data.archive_file.layer_zip[0].output_base64sha256
-  compatible_runtimes = var.layer_runtimes
-}
-
-############################################
-# LAMBDA FUNCTION (OPTIONAL LAYER ATTACH)
-############################################
-resource "aws_lambda_function" "lambda" {
-  function_name = var.function_name
-  filename      = data.archive_file.lambda_zip.output_path
-  handler       = "${var.handler}.handler"
-  runtime       = var.runtime
+############################
+# LAMBDA FUNCTION
+############################
+resource "aws_lambda_function" "this" {
+  function_name = var.lambda_name
   role          = var.role_arn
-  publish       = true
+  handler       = var.handler
+  runtime       = var.runtime
+  filename      = var.lambda_zip_path
 
-  layers = var.enable_layers ? [aws_lambda_layer_version.this[0].arn] : []
-
-  environment {
-    variables = var.env_vars
-  }
-}
-
-############################################
-# EVENT BUS
-############################################
-resource "aws_cloudwatch_event_bus" "s3_bus" {
-  name = var.event_bus_name
-}
-
-############################################
-# EVENT RULE – S3 PUT (PREFIX OR WILDCARD)
-############################################
-resource "aws_cloudwatch_event_rule" "s3_put" {
-  name           = "${var.event_bus_name}-s3-put"
-  event_bus_name = aws_cloudwatch_event_bus.s3_bus.name
-
-  event_pattern = jsonencode({
-    source      = ["aws.s3"],
-    "detail-type" = ["Object Created"],
-    detail = {
-      bucket = {
-        name = [var.s3_bucket_name]
-      },
-      object = var.s3_prefix == "" ? {} : {
-        key = [{
-          prefix = var.s3_prefix
-        }]
-      }
-    }
-  })
-}
-
-############################################
-# EVENT TARGET
-############################################
-resource "aws_cloudwatch_event_target" "lambda_target" {
-  rule          = aws_cloudwatch_event_rule.s3_put.name
-  event_bus_name = aws_cloudwatch_event_bus.s3_bus.name
-  arn           = aws_lambda_function.lambda.arn
-}
-
-############################################
-# PERMISSION FOR EVENTBRIDGE
-############################################
-resource "aws_lambda_permission" "allow_eventbridge" {
-  statement_id  = "AllowEventBridgeInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.lambda.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.s3_put.arn
+  layers = local.lambda_layers_local
 }
