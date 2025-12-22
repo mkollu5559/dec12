@@ -1,218 +1,81 @@
 ############################
-# LAMBDA FUNCTION
+# VARIABLES
 ############################
+variable "lambda_name" {
+  type = string
+}
 
-resource "aws_lambda_function" "lambda" {
-  function_name = var.function_name
-  filename      = data.archive_file.lambda_zip.output_path
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+variable "handler" {
+  type = string
+}
 
-  handler = "${var.handler}.handler"
-  runtime = var.runtime
-  role   = var.lambda_role_arn
+variable "runtime" {
+  type = string
+}
 
-  memory_size = var.memory_size
-  timeout     = var.timeout
+variable "enable_dlq" {
+  type    = bool
+  default = false
+}
 
-  publish     = true
-  layers      = var.lambda_layers
-  kms_key_arn = var.kms_key_arn
-
-  reserved_concurrent_executions = var.reserved_concurrency
-
-  environment {
-    variables = var.environment_variables
-  }
-
-  vpc_config {
-    subnet_ids         = var.subnet_ids
-    security_group_ids = var.security_group_ids
-  }
-
-  tags = var.tags
+variable "async_max_retry_attempts" {
+  type    = number
+  default = 2
 }
 
 ############################
-# OPTIONAL DLQ
+# IAM ROLE (ASSUMED EXISTS OR DEFINE YOURS)
 ############################
+resource "aws_iam_role" "lambda_role" {
+  name = "${var.lambda_name}-role"
 
-resource "aws_sqs_queue" "dlq" {
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+############################
+# DLQ (ONLY WHEN ENABLED)
+############################
+resource "aws_sqs_queue" "lambda_dlq" {
   count = var.enable_dlq ? 1 : 0
-
-  name                      = "${var.function_name}-dlq"
-  message_retention_seconds = var.dlq_retention_seconds
-  kms_master_key_id         = var.kms_key_arn
-  tags                      = var.tags
+  name  = "${var.lambda_name}-dlq"
 }
 
 ############################
-# OPTIONAL SQS QUEUE
+# LAMBDA
 ############################
+resource "aws_lambda_function" "lambda" {
+  function_name = var.lambda_name
+  role          = aws_iam_role.lambda_role.arn
+  handler       = var.handler
+  runtime       = var.runtime
 
-resource "aws_sqs_queue" "queue" {
-  count = var.enable_sqs ? 1 : 0
+  filename         = "lambda.zip"
+  source_code_hash = filebase64sha256("lambda.zip")
 
-  name                       = "${var.function_name}-queue"
-  visibility_timeout_seconds = var.timeout * 6
-
-  redrive_policy = var.enable_dlq ? jsonencode({
-    deadLetterTargetArn = aws_sqs_queue.dlq[0].arn
-    maxReceiveCount     = var.dlq_max_receive_count
-  }) : null
-
-  kms_master_key_id = var.kms_key_arn
-  tags              = var.tags
-}
-
-############################
-# SQS → LAMBDA MAPPING
-############################
-
-resource "aws_lambda_event_source_mapping" "sqs" {
-  count = var.enable_sqs ? 1 : 0
-
-  event_source_arn = aws_sqs_queue.queue[0].arn
-  function_name    = aws_lambda_function.lambda.arn
-  batch_size       = var.sqs_batch_size
-  enabled          = true
-}
-
-############################
-# ASYNC INVOKE CONFIG (DLQ)
-############################
-
-resource "aws_lambda_function_event_invoke_config" "async" {
-  function_name = aws_lambda_function.lambda.function_name
-  maximum_retry_attempts = var.async_max_retry_attempts
-
-  dynamic "destination_config" {
+  dynamic "dead_letter_config" {
     for_each = var.enable_dlq ? [1] : []
     content {
-      on_failure {
-        destination = aws_sqs_queue.dlq[0].arn
-      }
+      target_arn = aws_sqs_queue.lambda_dlq[0].arn
     }
   }
 }
 
 ############################
-# VARIABLES
+# ASYNC INVOKE CONFIG (OPTIONAL – ONLY WHEN DLQ ENABLED)
 ############################
+resource "aws_lambda_function_event_invoke_config" "async" {
+  count = var.enable_dlq ? 1 : 0
 
-variable "function_name" {
-  type        = string
-  description = "Lambda function name."
-}
-
-variable "handler" {
-  type        = string
-  description = "Lambda handler (without .handler suffix)."
-}
-
-variable "runtime" {
-  type        = string
-  description = "Lambda runtime."
-}
-
-variable "lambda_role_arn" {
-  type        = string
-  description = "IAM role ARN for Lambda execution."
-}
-
-variable "memory_size" {
-  type        = number
-  default     = 128
-  description = "Lambda memory size in MB."
-}
-
-variable "timeout" {
-  type        = number
-  default     = 30
-  description = "Lambda timeout in seconds."
-}
-
-variable "lambda_layers" {
-  type        = list(string)
-  default     = []
-  description = "List of Lambda layer ARNs."
-}
-
-variable "environment_variables" {
-  type        = map(string)
-  default     = {}
-  description = "Environment variables for Lambda."
-}
-
-variable "subnet_ids" {
-  type        = list(string)
-  default     = []
-  description = "Subnet IDs for Lambda VPC config."
-}
-
-variable "security_group_ids" {
-  type        = list(string)
-  default     = []
-  description = "Security group IDs for Lambda VPC config."
-}
-
-variable "kms_key_arn" {
-  type        = string
-  description = "KMS key ARN for Lambda and SQS encryption."
-}
-
-variable "tags" {
-  type        = map(string)
-  default     = {}
-  description = "Tags to apply to all resources."
-}
-
-############################
-# SQS / DLQ CONTROLS
-############################
-
-variable "enable_sqs" {
-  type        = bool
-  default     = false
-  description = "Enable SQS trigger for Lambda."
-
-  validation {
-    condition     = !(var.enable_sqs && !var.enable_dlq)
-    error_message = "enable_dlq must be true when enable_sqs is true."
-  }
-}
-
-variable "enable_dlq" {
-  type        = bool
-  default     = false
-  description = "Enable Dead Letter Queue."
-}
-
-variable "dlq_retention_seconds" {
-  type        = number
-  default     = 1209600
-  description = "DLQ message retention in seconds."
-}
-
-variable "dlq_max_receive_count" {
-  type        = number
-  default     = 5
-  description = "Max receives before message goes to DLQ."
-}
-
-variable "sqs_batch_size" {
-  type        = number
-  default     = 10
-  description = "SQS batch size for Lambda trigger."
-}
-
-variable "async_max_retry_attempts" {
-  type        = number
-  default     = 0
-  description = "Async Lambda retry attempts."
-}
-
-variable "reserved_concurrency" {
-  type        = number
-  default     = -1
-  description = "Reserved concurrency for Lambda (-1 = unreserved)."
+  function_name                = aws_lambda_function.lambda.function_name
+  maximum_retry_attempts       = var.async_max_retry_attempts
+  maximum_event_age_in_seconds = 21600
 }
