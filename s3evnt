@@ -1,131 +1,27 @@
-############################
-# VARIABLES
-############################
-
-variable "enable_s3_event" {
-  description = "Enable S3 based EventBridge rule"
-  type        = bool
-  default     = false
+variable "enable_s3_cloudwatch_event" {
+  type    = bool
+  default = false
 }
 
-variable "event_bus_name" {
-  description = "EventBridge event bus name"
-  type        = string
-}
-
-variable "s3_bucket_name" {
-  description = "S3 bucket name to listen for events"
-  type        = string
-  default     = null
-}
-
-variable "s3_prefix" {
-  description = "S3 object key prefix filter (DEFAULT). Example: incoming/"
-  type        = string
-  default     = null
-}
-
-variable "s3_wildcard" {
-  description = "Optional wildcard override. Example: incoming/*.csv"
-  type        = string
-  default     = null
-}
-
-############################
-# VALIDATION
-############################
-
-variable "s3_prefix" {
-  description = "S3 prefix (required if wildcard not provided)"
-  type        = string
-  default     = null
+variable "event_pattern_file" {
+  type    = string
+  default = null
 
   validation {
     condition = (
-      var.enable_s3_event == false ||
-      var.s3_wildcard != null ||
-      (var.s3_prefix != null && trim(var.s3_prefix) != "")
+      var.enable_s3_cloudwatch_event == false ||
+      (var.event_pattern_file != null && trim(var.event_pattern_file) != "")
     )
-    error_message = "When enable_s3_event=true and s3_wildcard is not provided, s3_prefix must be set."
+    error_message = "event_pattern_file must be provided when enable_s3_cloudwatch_event is true."
   }
 }
 
-############################
-# DATA
-############################
+resource "aws_cloudwatch_event_rule" "event_rule" {
+  count = var.enable_s3_cloudwatch_event ? 1 : 0
 
-data "aws_caller_identity" "current" {}
+  name           = "${var.function_name}-event-rule"
+  event_bus_name = "sftp-nit-nis-ext-cloudwatch_event_bus"
+  tags           = local.tags_local
 
-############################
-# LOCALS
-############################
-
-locals {
-  s3_key_filter = var.s3_wildcard != null ? {
-    key = [{
-      wildcard = var.s3_wildcard
-    }]
-  } : {
-    key = [{
-      prefix = var.s3_prefix
-    }]
-  }
-}
-
-############################
-# EVENT BUS
-############################
-
-resource "aws_cloudwatch_event_bus" "custom" {
-  name = var.event_bus_name
-}
-
-############################
-# S3 EVENT RULE
-############################
-
-resource "aws_cloudwatch_event_rule" "s3_put_rule" {
-  count = var.enable_s3_event ? 1 : 0
-
-  name           = "${var.event_bus_name}-s3-put"
-  event_bus_name = aws_cloudwatch_event_bus.custom.name
-
-  event_pattern = jsonencode({
-    source      = ["aws.s3"]
-    detail-type = ["Object Created"]
-    detail = {
-      bucket = {
-        name = [var.s3_bucket_name]
-      }
-      object = local.s3_key_filter
-    }
-  })
-}
-
-############################
-# EVENT TARGET
-############################
-
-resource "aws_cloudwatch_event_target" "s3_lambda_target" {
-  count = var.enable_s3_event ? 1 : 0
-
-  event_bus_name = aws_cloudwatch_event_bus.custom.name
-  rule           = aws_cloudwatch_event_rule.s3_put_rule[0].name
-  target_id      = "lambda"
-  arn            = aws_lambda_function.lambda.arn
-}
-
-############################
-# LAMBDA PERMISSION
-############################
-
-resource "aws_lambda_permission" "allow_s3_eventbridge" {
-  count = var.enable_s3_event ? 1 : 0
-
-  statement_id   = "AllowExecutionFromS3EventBridge"
-  action         = "lambda:InvokeFunction"
-  function_name  = aws_lambda_function.lambda.function_name
-  principal      = "events.amazonaws.com"
-  source_arn     = aws_cloudwatch_event_rule.s3_put_rule[0].arn
-  source_account = data.aws_caller_identity.current.account_id
+  event_pattern = file(var.event_pattern_file)
 }
